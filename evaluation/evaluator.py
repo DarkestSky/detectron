@@ -138,11 +138,19 @@ def inference_on_dataset(model, data_loader, evaluator):
                 total_compute_time = 0
 
             start_compute_time = time.perf_counter()
+            # outputs: list<dict>, dict 包含 key 'instances', value type 为 Instances
+            # Instances: {
+            #     _image_size,
+            #     pred_boxes: Boxes,
+            #     scores: Tensor,
+            #     pred_classes: Tensor    
+            # }
             outputs = model(inputs)
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             total_compute_time += time.perf_counter() - start_compute_time
-            evaluator.process(inputs, outputs)
+            evaluator.process(inputs, outputs)  # DatasetEvaluators, 内有一项 COCOEvaluator
+            # output 转换了格式, 结果保存在了 COCOEvaluator._predictions
 
             iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
             seconds_per_img = total_compute_time / iters_after_start

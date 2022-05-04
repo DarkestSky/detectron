@@ -88,7 +88,7 @@ class Box2BoxTransform(object):
         ctr_x = boxes[:, 0] + 0.5 * widths
         ctr_y = boxes[:, 1] + 0.5 * heights
 
-        wx, wy, ww, wh = self.weights
+        wx, wy, ww, wh = self.weights   # (1.0, 1.0, 1.0, 1.0)
         dx = deltas[:, 0::4] / wx
         dy = deltas[:, 1::4] / wy
         dw = deltas[:, 2::4] / ww
