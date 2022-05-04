@@ -270,10 +270,15 @@ class RetinaNet(nn.Module):
         import pdb
         pdb.set_trace()
         
-        pred_logits, pred_anchor_deltas = self.head(features)
+        # pred_logits: [[1, 189, 80, 48], [1, 189, 40, 24], [1, 189, 20, 12], [1, 189, 10, 6], [1, 189, 5, 3]]
+        # pred_anchor_deltas: [[1, 36, 80, 48], [1, 36, 40, 24], [1, 36, 20, 12], [1, 36, 10, 6], [1, 36, 5, 3]]
+        pred_logits, pred_anchor_deltas = self.head(features)   # RetinaNetHead
+        
         # Transpose the Hi*Wi*A dimension to the middle:
-        pred_logits = [permute_to_N_HWA_K(x, self.num_classes) for x in pred_logits]
+        pred_logits = [permute_to_N_HWA_K(x, self.num_classes) for x in pred_logits]    # self.num_classes = 21
         pred_anchor_deltas = [permute_to_N_HWA_K(x, 4) for x in pred_anchor_deltas]
+        # pred_logits: [[1, 34560, 21], [1, 8460, 21], [1, 2160, 21], [1, 540, 21], [1, 135, 21]]
+        # pred_anchor_deltas: [[1, 34560, 4], [1, 8460, 4], [1, 2160, 4], [1, 540, 4], [1, 135, 4]]
 
         if self.training:
             assert "instances" in batched_inputs[0], "Instance annotations are missing in training!"
@@ -292,6 +297,13 @@ class RetinaNet(nn.Module):
 
             return losses
         else:
+            # results: list<Instances>, 每个图片对应一个 Instances
+            # Instances: {
+            #     _image_size,
+            #     pred_boxes: Boxes,
+            #     scores: Tensor,
+            #     pred_classes: Tensor    
+            # }
             results = self.inference(anchors, pred_logits, pred_anchor_deltas, images.image_sizes)
             processed_results = []
             for results_per_image, input_per_image, image_size in zip(
@@ -299,7 +311,7 @@ class RetinaNet(nn.Module):
             ):
                 height = input_per_image.get("height", image_size[0])
                 width = input_per_image.get("width", image_size[1])
-                r = detector_postprocess(results_per_image, height, width)
+                r = detector_postprocess(results_per_image, height, width)  # 调整size, 与输入图片匹配
                 processed_results.append({"instances": r})
             return processed_results
 
@@ -465,39 +477,46 @@ class RetinaNet(nn.Module):
 
             # Apply two filtering below to make NMS faster.
             # 1. Keep boxes with confidence score higher than threshold
-            keep_idxs = predicted_prob > self.test_score_thresh
+            keep_idxs = predicted_prob > self.test_score_thresh # 0.05
             predicted_prob = predicted_prob[keep_idxs]
-            topk_idxs = torch.nonzero(keep_idxs, as_tuple=True)[0]
+            topk_idxs = torch.nonzero(keep_idxs, as_tuple=True)[0]  # keep_idxs 中值为 true 的下标
 
             # 2. Keep top k top scoring boxes only
             num_topk = min(self.test_topk_candidates, topk_idxs.size(0))
             # torch.sort is actually faster than .topk (at least on GPUs)
-            predicted_prob, idxs = predicted_prob.sort(descending=True)
+            predicted_prob, idxs = predicted_prob.sort(descending=True) # 排序选出 topk
             predicted_prob = predicted_prob[:num_topk]
             topk_idxs = topk_idxs[idxs[:num_topk]]
 
-            anchor_idxs = topk_idxs // self.num_classes
-            classes_idxs = topk_idxs % self.num_classes
+            anchor_idxs = topk_idxs // self.num_classes # 选出的 anchor
+            classes_idxs = topk_idxs % self.num_classes # 该 anchor 属于的类型
 
+            # 选出的 anchor 的偏移
             box_reg_i = box_reg_i[anchor_idxs]
             anchors_i = anchors_i[anchor_idxs]
-            # predict boxes
+            # predict boxes, 格式是 x1, y1, x2, y2
             predicted_boxes = self.box2box_transform.apply_deltas(box_reg_i, anchors_i.tensor)
 
             boxes_all.append(predicted_boxes)
             scores_all.append(predicted_prob)
             class_idxs_all.append(classes_idxs)
-
+        # boxes_all, scores_all, class_idxs_all 各包含 5 项, 表示来自各层特征图的结果
+        # boxes_all 保存的是 box 的位置, scores_all 保存的是概率, class_idxs_all 保存的是类别
+        
+        # 将 list 中内容进行 cat 拼接起来
         boxes_all, scores_all, class_idxs_all = [
             cat(x) for x in [boxes_all, scores_all, class_idxs_all]
         ]
-        keep = batched_nms(boxes_all, scores_all, class_idxs_all, self.test_nms_thresh)
+        # Non-Maximum Suppression 非最大值抑制
+        # keep 保存的是最终保留的下标
+        keep = batched_nms(boxes_all, scores_all, class_idxs_all, self.test_nms_thresh) # test_nms_thresh = 0.5
         keep = keep[: self.max_detections_per_image]
 
         result = Instances(image_size)
         result.pred_boxes = Boxes(boxes_all[keep])
         result.scores = scores_all[keep]
         result.pred_classes = class_idxs_all[keep]
+        # TODO: 返回的结果加入预测的完整 logits
         return result
 
     def preprocess_image(self, batched_inputs):
@@ -615,9 +634,21 @@ class RetinaNetHead(nn.Module):
                 regression values for every anchor. These values are the
                 relative offset between the anchor and the ground truth box.
         """
+        
+        # features: {
+        #     'p3': [1, 256, 80, 48],
+        #     'p4': [1, 256, 40, 24],
+        #     'p5': [1, 256, 20, 12],
+        #     'p6': [1, 256, 10, 6],
+        #     'p7': [1, 256, 5, 3]
+        # }
+        
         logits = []
         bbox_reg = []
+        # Repeat of Conv2d + ReLU
         for feature in features:
             logits.append(self.cls_score(self.cls_subnet(feature)))
             bbox_reg.append(self.bbox_pred(self.bbox_subnet(feature)))
+        # logits: [[1, 189, 80, 48], [1, 189, 40, 24], [1, 189, 20, 12], [1, 189, 10, 6], [1, 189, 5, 3]]
+        # bbox_reg: [[1, 36, 80, 48], [1, 36, 40, 24], [1, 36, 20, 12], [1, 36, 10, 6], [1, 36, 5, 3]]
         return logits, bbox_reg

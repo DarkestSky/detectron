@@ -41,6 +41,7 @@ def detector_postprocess(results, output_height, output_width, mask_threshold=0.
     else:
         output_height_tmp = output_height
 
+    # 检测结果的尺寸和图片原尺寸的比例
     scale_x, scale_y = (
         output_width_tmp / results.image_size[1],
         output_height_tmp / results.image_size[0],
