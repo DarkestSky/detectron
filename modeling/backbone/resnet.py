@@ -353,9 +353,12 @@ class BasicStem(CNNBlockBase):
         weight_init.c2_msra_fill(self.conv1)
 
     def forward(self, x):
+        # x: [1, 3, 640, 384]
         x = self.conv1(x)
+        # x: [1, 64, 320, 192]
         x = F.relu_(x)
         x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1)
+        # x: [1, 64, 160, 96]
         return x
 
 
@@ -429,13 +432,20 @@ class ResNet(Backbone):
         """
         assert x.dim() == 4, f"ResNet takes an input of shape (N, C, H, W). Got {x.shape} instead!"
         outputs = {}
+        # x: [1, 3, 640, 384]
+        # stem: BasicStem (conv2d -> relu -> max_pooling2d)
         x = self.stem(x)
-        if "stem" in self._out_features:
+        # x: [1, 64, 160, 96]
+    
+        if "stem" in self._out_features:    # _out_features: ['res3', 'res4', 'res5']
             outputs["stem"] = x
-        for stage, name in self.stages_and_names:
+        for stage, name in self.stages_and_names:   # res2 -> res3 -> res4 -> res5
             x = stage(x)
             if name in self._out_features:
                 outputs[name] = x
+        # outputs['res3']: [1, 512, 80, 48]
+        # outputs['res4']: [1, 1024, 40, 24]
+        # outputs['res5']: [1, 2048, 20, 12]
         if self.num_classes is not None:
             x = self.avgpool(x)
             x = torch.flatten(x, 1)

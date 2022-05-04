@@ -120,26 +120,55 @@ class FPN(Backbone):
                 paper convention: "p<stage>", where stage has stride = 2 ** stage e.g.,
                 ["p2", "p3", ..., "p6"].
         """
+        
+        # x: [1, 3, 640, 384]
+        
         # Reverse feature maps into top-down order (from low to high resolution)
+        # bottom_up 是 ResNet, 自底向上计算特征图
+        # bottom_up_features: {
+        #   'res3': [1, 512, 80, 48],
+        #   'res4': [1, 1024, 40, 24],
+        #   'res5': [1, 2048, 20, 12]
+        # }
         bottom_up_features = self.bottom_up(x)
+        
+        # x 中调转了顺序
+        # x: ['res5', 'res4', 'res3']  从金字塔顶向下的顺序
         x = [bottom_up_features[f] for f in self.in_features[::-1]]
+        
+        # results 中保存的是自顶向下通路的特征图
+        # 保存的顺序是 ['res3', 'res4', 'res5'] 为自底向上的顺序
         results = []
+        
+        # lateral_convs 各项都是 Conv2d, 输出维度都是 256
+        # output_convs 各项都是 Conv2d, 输出维度都是 256
+        # 顶层的 res5 直接经过 lateral_convs -> output_convs 后添加到
         prev_features = self.lateral_convs[0](x[0])
         results.append(self.output_convs[0](prev_features))
         for features, lateral_conv, output_conv in zip(
             x[1:], self.lateral_convs[1:], self.output_convs[1:]
         ):
+            # 各层计算自顶向下的通路 以及水平连接
+            # 相加后 经过 output_conv
             top_down_features = F.interpolate(prev_features, scale_factor=2, mode="nearest")
             lateral_features = lateral_conv(features)
             prev_features = lateral_features + top_down_features
             if self._fuse_type == "avg":
                 prev_features /= 2
             results.insert(0, output_conv(prev_features))
+        # results: [
+        #   [1, 256, 80, 48],
+        #   [1, 256, 40, 24],
+        #   [1, 256, 20, 12]
+        # ]
 
         if self.top_block is not None:
-            top_block_in_feature = bottom_up_features.get(self.top_block.in_feature, None)
+            top_block_in_feature = bottom_up_features.get(self.top_block.in_feature, None)  # self.top_block.in_feature: 'res5'
+            # 'res5': [1, 2048, 20, 12]
             if top_block_in_feature is None:
                 top_block_in_feature = results[self._out_features.index(self.top_block.in_feature)]
+            # res5 -> conv2d -> p6 [1, 256, 10, 6]
+            # p6 -> relu -> conv2d -> p7 [1, 256, 5, 3]
             results.extend(self.top_block(top_block_in_feature))
         assert len(self._out_features) == len(results)
         return dict(zip(self._out_features, results))
@@ -194,8 +223,9 @@ class LastLevelP6P7(nn.Module):
             weight_init.c2_xavier_fill(module)
 
     def forward(self, c5):
-        p6 = self.p6(c5)
-        p7 = self.p7(F.relu(p6))
+        # c5: [1, 2048, 20, 12]
+        p6 = self.p6(c5)    # [1, 256, 10, 6]
+        p7 = self.p7(F.relu(p6))    # [1, 256, 5, 3]
         return [p6, p7]
 
 

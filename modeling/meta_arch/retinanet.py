@@ -243,14 +243,33 @@ class RetinaNet(nn.Module):
                 mapping from a named loss to a tensor storing the loss. Used during training only.
         """
         
+        # batched_inputs: list<dict>
+        # keys: dict_keys(['file_name', 'height', 'width', 'image_id', 'image'])
+        
+        # preprocess 将图片进行标准化, 转为 ImageList 类型
+        images = self.preprocess_image(batched_inputs)
+        # backbone 是 FPN, Feature Pyramid Network
+        # features: dict
+        # keys: dict_keys(['p3', 'p4', 'p5', 'p6', 'p7'])
+        # 得到的是 FPN 中右侧自顶向下的特征图, 再其基础上额外添加了 p6 p7
+        # features: {
+        #     'p3': [1, 256, 80, 48],
+        #     'p4': [1, 256, 40, 24],
+        #     'p5': [1, 256, 20, 12],
+        #     'p6': [1, 256, 10, 6],
+        #     'p7': [1, 256, 5, 3]
+        # }
+        features = self.backbone(images.tensor)
+        features = [features[f] for f in self.head_in_features] # 无修改
+
+        # anchors: list<Boxes> 长度为 5
+        # [34560, 4], [8640, 4], [2160, 4], [540, 4], [135, 4]
+        anchors = self.anchor_generator(features)   # DefaultAnchorGenerator
+        
+        
         import pdb
         pdb.set_trace()
         
-        images = self.preprocess_image(batched_inputs)
-        features = self.backbone(images.tensor)
-        features = [features[f] for f in self.head_in_features]
-
-        anchors = self.anchor_generator(features)
         pred_logits, pred_anchor_deltas = self.head(features)
         # Transpose the Hi*Wi*A dimension to the middle:
         pred_logits = [permute_to_N_HWA_K(x, self.num_classes) for x in pred_logits]
@@ -412,6 +431,7 @@ class RetinaNet(nn.Module):
         for img_idx, image_size in enumerate(image_sizes):
             pred_logits_per_image = [x[img_idx] for x in pred_logits]
             deltas_per_image = [x[img_idx] for x in pred_anchor_deltas]
+            # pred_logits_per_image & deltas_per_image: [Hi * Wi * Ai, K or 4]
             results_per_image = self.inference_single_image(
                 anchors, pred_logits_per_image, deltas_per_image, tuple(image_size)
             )

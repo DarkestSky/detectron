@@ -43,7 +43,7 @@ def _create_grid_offsets(size: List[int], stride: int, offset: float, device: to
         offset * stride, grid_height * stride, step=stride, dtype=torch.float32, device=device
     )
 
-    shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)
+    shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)   # 生成网格
     shift_x = shift_x.reshape(-1)
     shift_y = shift_y.reshape(-1)
     return shift_x, shift_y
@@ -161,15 +161,20 @@ class DefaultAnchorGenerator(nn.Module):
         Returns:
             list[Tensor]: #featuremap tensors, each is (#locations x #cell_anchors) x 4
         """
+        # grid_sizes: [torch.Size([80, 48]), torch.Size([40, 24]), torch.Size([20, 12]), torch.Size([10, 6]), torch.Size([5, 3])]
         anchors = []
         # buffers() not supported by torchscript. use named_buffers() instead
         buffers: List[torch.Tensor] = [x[1] for x in self.cell_anchors.named_buffers()]
+        # buffer 共 5 项, 各项的 shape 均为 [9, 4]
+        # self.strides = [8, 16, 32, 64, 128]
         for size, stride, base_anchors in zip(grid_sizes, self.strides, buffers):
-            shift_x, shift_y = _create_grid_offsets(size, stride, self.offset, base_anchors.device)
+            shift_x, shift_y = _create_grid_offsets(size, stride, self.offset, base_anchors.device) # 划分网格
             shifts = torch.stack((shift_x, shift_y, shift_x, shift_y), dim=1)
 
             anchors.append((shifts.view(-1, 1, 4) + base_anchors.view(1, -1, 4)).reshape(-1, 4))
 
+        # anchors: list<Tensor>
+        # anchors: [34560, 4], [8640, 4], [2160, 4], [540, 4], [135, 4]
         return anchors
 
     def generate_cell_anchors(self, sizes=(32, 64, 128, 256, 512), aspect_ratios=(0.5, 1, 2)):
@@ -220,8 +225,17 @@ class DefaultAnchorGenerator(nn.Module):
                 The number of anchors of each feature map is Hi x Wi x num_cell_anchors,
                 where Hi, Wi are resolution of the feature map divided by anchor stride.
         """
+        # features: {
+        #     'p3': [1, 256, 80, 48],
+        #     'p4': [1, 256, 40, 24],
+        #     'p5': [1, 256, 20, 12],
+        #     'p6': [1, 256, 10, 6],
+        #     'p7': [1, 256, 5, 3]
+        # }
         grid_sizes = [feature_map.shape[-2:] for feature_map in features]
+        # grid_sizes: [torch.Size([80, 48]), torch.Size([40, 24]), torch.Size([20, 12]), torch.Size([10, 6]), torch.Size([5, 3])]
         anchors_over_all_feature_maps = self._grid_anchors(grid_sizes)
+        # anchors: [34560, 4], [8640, 4], [2160, 4], [540, 4], [135, 4]
         return [Boxes(x) for x in anchors_over_all_feature_maps]
 
 
