@@ -172,6 +172,7 @@ class COCOEvaluator(DatasetEvaluator):
             self._logger.warning("[COCOEvaluator] Did not receive valid predictions.")
             return {}
 
+        # 保存识别结果为 pth 文件
         if self._output_dir:
             PathManager.mkdirs(self._output_dir)
             file_path = os.path.join(self._output_dir, "instances_predictions.pth")
@@ -206,7 +207,7 @@ class COCOEvaluator(DatasetEvaluator):
                 ), "A prediction has category_id={}, which is not available in the dataset.".format(
                     category_id
                 )
-                result["category_id"] = reverse_id_mapping[category_id]
+                result["category_id"] = reverse_id_mapping[category_id]     # 从 0 为开始转换为 1 为开始
 
         if self._output_dir:
             file_path = os.path.join(self._output_dir, "coco_instances_results.json")
@@ -224,7 +225,7 @@ class COCOEvaluator(DatasetEvaluator):
                 "unofficial" if self._use_fast_impl else "official"
             )
         )
-        for task in sorted(tasks):
+        for task in sorted(tasks):      # tasks = ('bbox', 'bbox')
             coco_eval = (
                 _evaluate_predictions_on_coco(
                     self._coco_api,
@@ -532,6 +533,10 @@ def _evaluate_predictions_on_coco(
     """
     Evaluate the coco results using COCOEval API.
     """
+    
+    # coco_gt: self._coco_api, class COCO
+    # iou_type: bbox
+    
     assert len(coco_results) > 0
 
     if iou_type == "segm":

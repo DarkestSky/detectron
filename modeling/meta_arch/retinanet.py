@@ -244,7 +244,8 @@ class RetinaNet(nn.Module):
         """
         
         # batched_inputs: list<dict>
-        # keys: dict_keys(['file_name', 'height', 'width', 'image_id', 'image'])
+        # train 时 keys: dict_keys(['file_name', 'height', 'width', 'image_id', 'image', 'instances'])
+        # evaluation 时 keys: dict_keys(['file_name', 'height', 'width', 'image_id', 'image'])
         
         # preprocess 将图片进行标准化, 转为 ImageList 类型
         images = self.preprocess_image(batched_inputs)
@@ -265,11 +266,7 @@ class RetinaNet(nn.Module):
         # anchors: list<Boxes> 长度为 5
         # [34560, 4], [8640, 4], [2160, 4], [540, 4], [135, 4]
         anchors = self.anchor_generator(features)   # DefaultAnchorGenerator
-        
-        
-        import pdb
-        pdb.set_trace()
-        
+                
         # pred_logits: [[1, 189, 80, 48], [1, 189, 40, 24], [1, 189, 20, 12], [1, 189, 10, 6], [1, 189, 5, 3]]
         # pred_anchor_deltas: [[1, 36, 80, 48], [1, 36, 40, 24], [1, 36, 20, 12], [1, 36, 10, 6], [1, 36, 5, 3]]
         pred_logits, pred_anchor_deltas = self.head(features)   # RetinaNetHead
@@ -284,6 +281,9 @@ class RetinaNet(nn.Module):
             assert "instances" in batched_inputs[0], "Instance annotations are missing in training!"
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
 
+            # gt_labels 和 gt_boxes 都与 anchor 对应
+            # gt_labels 表示与 anchor 匹配的 gt_box 的 class
+            # gt_boxes 表示与 anchor 匹配的 gt_box
             gt_labels, gt_boxes = self.label_anchors(anchors, gt_instances)
             losses = self.losses(anchors, pred_logits, gt_labels, pred_anchor_deltas, gt_boxes)
 
@@ -303,6 +303,7 @@ class RetinaNet(nn.Module):
             #     pred_boxes: Boxes,
             #     scores: Tensor,
             #     pred_classes: Tensor    
+            # *   logits: Tensor  (添加的内容)
             # }
             results = self.inference(anchors, pred_logits, pred_anchor_deltas, images.image_sizes)
             processed_results = []
@@ -407,7 +408,9 @@ class RetinaNet(nn.Module):
         matched_gt_boxes = []
         for gt_per_image in gt_instances:
             match_quality_matrix = pairwise_iou(gt_per_image.gt_boxes, anchors)
-            matched_idxs, anchor_labels = self.anchor_matcher(match_quality_matrix)
+            # matched_idxs 长度与 anchors 数量相同, 表示各个 anchors 匹配的 gt_boxes 下标
+            # anchor_labels 长度与 anchors 数量相同
+            matched_idxs, anchor_labels = self.anchor_matcher(match_quality_matrix)     # detectron2.modeling.matcher.Matcher
             del match_quality_matrix
 
             if len(gt_per_image) > 0:
@@ -469,9 +472,13 @@ class RetinaNet(nn.Module):
         boxes_all = []
         scores_all = []
         class_idxs_all = []
+        logits_all = []     # save original logits (实际上不完全是 logits)
 
         # Iterate over every feature level
         for box_cls_i, box_reg_i, anchors_i in zip(box_cls, box_delta, anchors):
+            # 保存预测值            
+            orig_logits = box_cls_i.sigmoid_()     # shape: [-1, 21]
+            
             # (HxWxAxK,)
             predicted_prob = box_cls_i.flatten().sigmoid_()
 
@@ -494,18 +501,20 @@ class RetinaNet(nn.Module):
             # 选出的 anchor 的偏移
             box_reg_i = box_reg_i[anchor_idxs]
             anchors_i = anchors_i[anchor_idxs]
+            orig_logits = orig_logits[anchor_idxs]
             # predict boxes, 格式是 x1, y1, x2, y2
             predicted_boxes = self.box2box_transform.apply_deltas(box_reg_i, anchors_i.tensor)
 
             boxes_all.append(predicted_boxes)
             scores_all.append(predicted_prob)
             class_idxs_all.append(classes_idxs)
+            logits_all.append(orig_logits)
         # boxes_all, scores_all, class_idxs_all 各包含 5 项, 表示来自各层特征图的结果
         # boxes_all 保存的是 box 的位置, scores_all 保存的是概率, class_idxs_all 保存的是类别
         
         # 将 list 中内容进行 cat 拼接起来
-        boxes_all, scores_all, class_idxs_all = [
-            cat(x) for x in [boxes_all, scores_all, class_idxs_all]
+        boxes_all, scores_all, class_idxs_all, logits_all = [
+            cat(x) for x in [boxes_all, scores_all, class_idxs_all, logits_all]
         ]
         # Non-Maximum Suppression 非最大值抑制
         # keep 保存的是最终保留的下标
@@ -516,7 +525,8 @@ class RetinaNet(nn.Module):
         result.pred_boxes = Boxes(boxes_all[keep])
         result.scores = scores_all[keep]
         result.pred_classes = class_idxs_all[keep]
-        # TODO: 返回的结果加入预测的完整 logits
+        result.logits = logits_all[keep]
+        # 返回的结果加入预测的完整 logits
         return result
 
     def preprocess_image(self, batched_inputs):

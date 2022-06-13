@@ -144,6 +144,7 @@ def inference_on_dataset(model, data_loader, evaluator):
             #     pred_boxes: Boxes,
             #     scores: Tensor,
             #     pred_classes: Tensor    
+            # *   logits: Tensor
             # }
             outputs = model(inputs)
             if torch.cuda.is_available():
